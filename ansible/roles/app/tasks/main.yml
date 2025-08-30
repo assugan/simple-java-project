@@ -3,24 +3,23 @@
   command: docker compose down
   args:
     chdir: /home/ubuntu
-  ignore_errors: true   # если первый раз — файла docker-compose.yml может ещё не быть
+  ignore_errors: true
 
-- name: Create docker-compose.yml with dynamic image
+- name: Create docker-compose.yml (keep container running)
   copy:
     dest: /home/ubuntu/docker-compose.yml
     content: |
-      version: "3.9"
       services:
         app:
-          image: "{{ docker_image | default('diploma-app:latest') }}"
-          restart: always
+          image: "{{ docker_image | default('assugan/diploma-app:latest') }}"
           container_name: diploma-app
-          command: ["java", "-jar", "app.jar"]
+          restart: unless-stopped
+          command: ["/bin/sh", "-c", "while true; do java -jar app.jar; sleep 30; done"]
     owner: ubuntu
     group: ubuntu
     mode: '0644'
 
-- name: Start app with docker-compose
+- name: Start app
   command: docker compose up -d
   args:
     chdir: /home/ubuntu
