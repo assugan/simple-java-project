@@ -3,8 +3,10 @@ pipeline {
   tools { maven 'Maven_3.9' }
 
   environment {
+    // На macOS добавляем пути к docker/ansible
     PATH = "/usr/local/bin:/opt/homebrew/bin:/Applications/Docker.app/Contents/Resources/bin:${PATH}"
     DOCKER_IMAGE = "assugan/diploma-app"     // репозиторий в DockerHub должен существовать
+    EC2_IP = "18.197.110.98"                 // подставь актуальный публичный IP EC2
   }
 
   options { timestamps() }
@@ -69,13 +71,19 @@ pipeline {
       steps {
         sh '''
           set -euxo pipefail
+
+          echo "--- add EC2 host key to known_hosts ---"
+          mkdir -p ~/.ssh
+          ssh-keyscan -H $EC2_IP >> ~/.ssh/known_hosts
+
           echo "--- ansible version ---"
           which ansible || true
           ansible --version || true
+
           echo "--- inventory preview ---"
           ansible-inventory -i ansible/inventory.ini --list | head -n 30 || true
 
-          echo "--- playbook ---"
+          echo "--- run playbook ---"
           ansible-playbook -i ansible/inventory.ini ansible/playbook.yml \
             --extra-vars "docker_image=$DOCKER_IMAGE:$BUILD_NUMBER"
         '''
@@ -85,6 +93,6 @@ pipeline {
 
   post {
     success { echo '✅ Build, Push and Deploy successful!' }
-    failure { echo '❌ Build failed! См. подробные логи выше (включён set -euxo pipefail).' }
+    failure { echo '❌ Build failed! См. подробные логи выше.' }
   }
 }
