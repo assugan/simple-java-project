@@ -9,7 +9,7 @@ services:
       - /home/ubuntu/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
 
   grafana:
-    image: grafana/grafana:12.1.0-pre
+    image: grafana/grafana:11.1.4      # <<< ВАЖНО: стабильный тег, не pre-release
     container_name: grafana
     restart: unless-stopped
     ports:
@@ -37,6 +37,7 @@ services:
     image: gcr.io/cadvisor/cadvisor:v0.49.1
     container_name: cadvisor
     restart: unless-stopped
+    # порт наружу не публикуем
     volumes:
       - /:/rootfs:ro
       - /var/run:/var/run:ro
