@@ -18,3 +18,9 @@ variable "vpc_cidr" {
 variable "subnet_cidr" {
   default = "10.0.1.0/24"
 }
+
+variable "allowed_cidr" {
+  description = "CIDR for admin access (your public IP /32)"
+  type        = string
+  default     = "93.109.191.53/32"
+}

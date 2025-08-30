@@ -47,38 +47,34 @@ resource "aws_security_group" "diploma_sg" {
   vpc_id = aws_vpc.main.id
   name   = "diploma-sg"
 
+  # SSH — только с твоего IP
   ingress {
     description = "SSH"
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = [var.allowed_cidr]
   }
 
+  # Prometheus — только с твоего IP
   ingress {
-    description = "App"
-    from_port   = 8080
-    to_port     = 8080
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  ingress {
-    description = "Prometheus"
+    description = "Prometheus UI"
     from_port   = 9090
     to_port     = 9090
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = [var.allowed_cidr]
   }
 
+  # Grafana — только с твоего IP
   ingress {
-    description = "Grafana"
+    description = "Grafana UI"
     from_port   = 3000
     to_port     = 3000
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = [var.allowed_cidr]
   }
 
+  # Исходящий трафик — открыт
   egress {
     from_port   = 0
     to_port     = 0
