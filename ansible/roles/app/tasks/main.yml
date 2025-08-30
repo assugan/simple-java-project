@@ -1,0 +1,25 @@
+---
+- name: Ensure old containers are stopped
+  command: docker compose down
+  args:
+    chdir: /home/ubuntu
+  ignore_errors: true
+
+- name: Create docker-compose.yml (keep container running)
+  copy:
+    dest: /home/ubuntu/docker-compose.yml
+    content: |
+      services:
+        app:
+          image: "{{ docker_image | default('assugan/diploma-app:latest') }}"
+          container_name: diploma-app
+          restart: unless-stopped
+          command: ["/bin/sh", "-c", "while true; do java -jar app.jar; sleep 30; done"]
+    owner: ubuntu
+    group: ubuntu
+    mode: '0644'
+
+- name: Start app
+  command: docker compose up -d
+  args:
+    chdir: /home/ubuntu
