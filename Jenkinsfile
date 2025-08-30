@@ -5,7 +5,7 @@ pipeline {
   environment {
     PATH = "/usr/local/bin:/opt/homebrew/bin:/Applications/Docker.app/Contents/Resources/bin:${PATH}"
     DOCKER_IMAGE = "assugan/diploma-app"
-    EC2_IP = "18.197.110.98"
+    EC2_IP = "3.121.162.244"
   }
 
   options { timestamps() }
