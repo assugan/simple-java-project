@@ -1,0 +1,26 @@
+---
+- name: Ensure old containers are stopped
+  command: docker compose down
+  args:
+    chdir: /home/ubuntu
+  ignore_errors: true   # если первый раз — файла docker-compose.yml может ещё не быть
+
+- name: Create docker-compose.yml with dynamic image
+  copy:
+    dest: /home/ubuntu/docker-compose.yml
+    content: |
+      version: "3.9"
+      services:
+        app:
+          image: "{{ docker_image | default('diploma-app:latest') }}"
+          restart: always
+          container_name: diploma-app
+          command: ["java", "-jar", "app.jar"]
+    owner: ubuntu
+    group: ubuntu
+    mode: '0644'
+
+- name: Start app with docker-compose
+  command: docker compose up -d
+  args:
+    chdir: /home/ubuntu
