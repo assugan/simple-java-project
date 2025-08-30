@@ -35,36 +35,33 @@ pipeline {
       }
     }
 
-    stage('Docker Build') {
-      steps {
-        sh '''
-          set -euxo pipefail
-          echo "--- docker version ---"
-          docker version
-          echo "--- building image ---"
-          docker build -t $DOCKER_IMAGE:$BUILD_NUMBER -f docker/Dockerfile .
-          echo "--- images (top 5) ---"
-          docker images | head -n 5
-        '''
-      }
-    }
+    stage('Docker Buildx (multi-arch) & Push') {
+        steps {
+            withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'DH_USER', passwordVariable: 'DH_PASS')]) {
+            sh '''
+                set -euxo pipefail
 
-    stage('Docker Login & Push') {
-      steps {
-        withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'DH_USER', passwordVariable: 'DH_PASS')]) {
-          sh '''
-            set -euxo pipefail
-            echo "--- docker login ---"
-            echo "$DH_PASS" | docker login -u "$DH_USER" --password-stdin
-            echo "--- pushing tags ---"
-            docker push $DOCKER_IMAGE:$BUILD_NUMBER
-            docker tag  $DOCKER_IMAGE:$BUILD_NUMBER $DOCKER_IMAGE:latest
-            docker push $DOCKER_IMAGE:latest
-            echo "--- logout ---"
-            docker logout || true
-          '''
+                echo "--- docker login ---"
+                echo "$DH_PASS" | docker login -u "$DH_USER" --password-stdin
+
+                echo "--- enable buildx ---"
+                docker buildx create --name diploma_builder --use || true
+                docker buildx inspect --bootstrap
+
+                echo "--- build & push multi-arch (amd64 + arm64) ---"
+                docker buildx build \
+                --platform linux/amd64,linux/arm64 \
+                -t $DOCKER_IMAGE:$BUILD_NUMBER \
+                -t $DOCKER_IMAGE:latest \
+                -f docker/Dockerfile \
+                --push \
+                .
+
+                echo "--- logout ---"
+                docker logout || true
+            '''
+            }
         }
-      }
     }
 
     stage('Deploy to EC2 (Ansible)') {
