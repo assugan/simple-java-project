@@ -3,6 +3,9 @@ pipeline {
   tools { maven 'Maven_3.9' }
 
   environment {
+    // macOS: чтобы Jenkins видел docker/ansible/terraform
+    PATH = "/usr/local/bin:/opt/homebrew/bin:/Applications/Docker.app/Contents/Resources/bin:${PATH}"
+
     // DockerHub repo
     DOCKER_IMAGE = "assugan/diploma-app"
   }
@@ -14,8 +17,7 @@ pipeline {
       steps {
         checkout scm
         script {
-          env.IS_PR = env.CHANGE_ID ? 'true' : 'false'
-          env.SHORT_SHA = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
+          env.SHORT_SHA   = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
           env.BRANCH_SAFE = (env.CHANGE_BRANCH ?: env.BRANCH_NAME).replaceAll('/','-').toLowerCase()
         }
       }
@@ -47,18 +49,20 @@ pipeline {
     stage('Docker Buildx & Push (main only)') {
       when {
         allOf {
-          branch 'main'
-          expression { env.CHANGE_ID == null } // не PR
+          expression { env.BRANCH_NAME == 'main' }  // именно ветка main
+          not { changeRequest() }                   // и это не PR
         }
       }
-      agent { label 'docker' } // тут точно есть Docker/Buildx
       steps {
         withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'DH_USER', passwordVariable: 'DH_PASS')]) {
           sh '''
             set -euo pipefail
             echo "$DH_PASS" | docker login -u "$DH_USER" --password-stdin
+
+            # buildx для multi-arch (Mac arm64 -> EC2 amd64)
             docker buildx create --name diploma_builder --use || true
             docker buildx inspect --bootstrap
+
             docker buildx build \
               --platform linux/amd64,linux/arm64 \
               -t "$DOCKER_IMAGE:${BRANCH_SAFE}-${SHORT_SHA}" \
@@ -67,6 +71,7 @@ pipeline {
               -f docker/Dockerfile \
               --push \
               .
+
             docker logout || true
           '''
         }
@@ -76,28 +81,30 @@ pipeline {
     stage('Deploy to EC2 (main only)') {
       when {
         allOf {
-          branch 'main'
-          expression { env.CHANGE_ID == null } // не PR
+          expression { env.BRANCH_NAME == 'main' }
+          not { changeRequest() }
         }
-      }
-      agent { label 'deploy' } // нода с Ansible (+ Terraform, если читаем output)
-      environment {
-        // Локально расширяем PATH для macOS
-        PATH = "/usr/local/bin:/opt/homebrew/bin:/Applications/Docker.app/Contents/Resources/bin:${PATH}"
       }
       steps {
-        script {
-          // Получаем IP только здесь, где реально нужен
-          def ec2Ip = sh(script: "cd infra && terraform output -raw ec2_public_ip", returnStdout: true).trim()
-          // Можно сохранить в env, если удобно:
-          env.EC2_IP = ec2Ip
-        }
         sh '''
           set -euo pipefail
+
+          # 1) Получаем актуальный IP из Terraform outputs
+          EC2_IP="$(cd infra && terraform output -raw ec2_public_ip)"
+          echo "EC2_IP=${EC2_IP}"
+
+          # 2) Подготавливаем known_hosts
           mkdir -p ~/.ssh
           ssh-keyscan -H "$EC2_IP" >> ~/.ssh/known_hosts
 
-          ansible-playbook -i ansible/inventory.ini ansible/playbook.yml \
+          # 3) Делаем временный dynamic-inventory, чтобы не править ansible/inventory.ini
+          cat > ansible/inventory.dynamic.ini <<INV
+[app]
+${EC2_IP} ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/ssh-diploma-key.pem
+INV
+
+          # 4) Запуск плейбука с образом текущей сборки
+          ansible-playbook -i ansible/inventory.dynamic.ini ansible/playbook.yml \
             --extra-vars "docker_image=$DOCKER_IMAGE:${BRANCH_SAFE}-${SHORT_SHA}"
         '''
       }
