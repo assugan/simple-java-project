@@ -6,7 +6,7 @@ regions:
 
 # Фильтр по тегу (ровно как в Terraform)
 filters:
-  tag:Name: diploma-ec2
+  tag:Name: diploma-app
   instance-state-name: running
 
 # Какое имя хоста использовать — публичный IP
