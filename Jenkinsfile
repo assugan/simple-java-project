@@ -1,13 +1,12 @@
-//  pipe
 pipeline {
   agent any
   tools { maven 'Maven_3.9' }
 
   environment {
-    // macOS: чтобы Jenkins видел docker/ansible/terraform
+    // macOS: чтобы Jenkins видел docker/ansible/terraform, если они стоят через Homebrew/Docker Desktop
     PATH = "/usr/local/bin:/opt/homebrew/bin:/Applications/Docker.app/Contents/Resources/bin:${PATH}"
 
-    // DockerHub repo
+    // Образ в DockerHub (должны быть credentials с ID: dockerhub-creds)
     DOCKER_IMAGE = "assugan/diploma-app"
   }
 
@@ -47,11 +46,12 @@ pipeline {
       }
     }
 
+    // Публикуем образы ТОЛЬКО для main и НЕ для PR
     stage('Docker Buildx & Push (main only)') {
       when {
         allOf {
-          expression { env.BRANCH_NAME == 'main' }  // именно ветка main
-          not { changeRequest() }                   // и это не PR
+          expression { env.BRANCH_NAME == 'main' } // именно ветка main
+          not { changeRequest() }                  // и это не PR
         }
       }
       steps {
@@ -79,6 +79,7 @@ pipeline {
       }
     }
 
+    // Деплой в EC2 через динамический инвентори AWS (только после merge в main)
     stage('Deploy to EC2 (main only)') {
       when {
         allOf {
@@ -90,22 +91,20 @@ pipeline {
         withCredentials([usernamePassword(credentialsId: 'aws-creds', usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY')]) {
           withEnv([
             'AWS_DEFAULT_REGION=eu-central-1',
-            'ANSIBLE_HOST_KEY_CHECKING=False' // не стопоримся на unknown host keys
+            'ANSIBLE_HOST_KEY_CHECKING=False' // чтобы не спотыкаться о known_hosts в CI
           ]) {
             sh '''
               set -euo pipefail
 
-              # Убедимся, что ansible есть и поставим коллекции
+              # Коллекции для dynamic inventory (amazon.aws) и зависимости
               ansible --version
               ansible-galaxy collection install -r ansible/requirements.yml --force
-
-              # (на всякий) Убедимся, что boto3 есть в активном Python
               python3 -m pip install --user boto3 botocore >/dev/null 2>&1 || true
 
-              # Быстрая диагностика: увидим найденные хосты
+              # Посмотрим, кого найдём по тегу Name=diploma-ec2 (как в Terraform)
               ansible-inventory -i ansible/inventory.aws_ec2.yml --graph
 
-              # Деплой приложения и мониторинга на все найденные инстансы
+              # Деплой приложения и мониторинга на найденные EC2
               ansible-playbook -i ansible/inventory.aws_ec2.yml ansible/playbook.yml \
                 --extra-vars "docker_image=$DOCKER_IMAGE:${BRANCH_SAFE}-${SHORT_SHA}"
             '''
@@ -113,9 +112,10 @@ pipeline {
         }
       }
     }
+  }
 
   post {
-    success { echo '✅ CI успешно; для main выполнены Buildx/Push/Deploy.' }
+    success { echo '✅ CI ок; для main выполнены Buildx/Push/Deploy.' }
     failure { echo '❌ Ошибка пайплайна (см. логи выше).' }
   }
 }
