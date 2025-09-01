@@ -1,18 +1,30 @@
 package com.mycompany.app;
 
 /**
- * Hello world!
+ * Hello world demo application.
  */
-public class App {
+public final class App {
 
+    /** Greeting message printed by the app. */
     private static final String MESSAGE = "Hello World!";
 
-    public App() {}
+    /** Default constructor. */
+    public App() { }
 
-    public static void main(String[] args) {
+    /**
+     * Application entry point.
+     *
+     * @param args command-line arguments (unused)
+     */
+    public static void main(final String[] args) {
         System.out.println(MESSAGE);
     }
 
+    /**
+     * Returns greeting message.
+     *
+     * @return greeting text
+     */
     public String getMessage() {
         return MESSAGE;
     }

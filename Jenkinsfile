@@ -3,9 +3,14 @@ pipeline {
   tools { maven 'Maven_3.9' }
 
   environment {
+    // Пути для macOS с Docker Desktop и Ansible в PATH
     PATH = "/usr/local/bin:/opt/homebrew/bin:/Applications/Docker.app/Contents/Resources/bin:${PATH}"
+
+    // DockerHub repo для публикации образов
     DOCKER_IMAGE = "assugan/diploma-app"
-    EC2_IP = "3.121.162.244"   //  EC2 IP
+
+    // Публичный IP твоего EC2
+    EC2_IP = sh(script: "cd infra && terraform output -raw ec2_public_ip", returnStdout: true).trim()
   }
 
   options { timestamps() }
@@ -15,7 +20,7 @@ pipeline {
       steps {
         checkout scm
         script {
-          // Multibranch: для PR Jenkins сам выставляет CHANGE_ID
+          // Multibranch: CHANGE_ID задан у PR, у обычных веток — нет
           env.IS_PR = env.CHANGE_ID ? 'true' : 'false'
           env.SHORT_SHA = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
           env.BRANCH_SAFE = (env.CHANGE_BRANCH ?: env.BRANCH_NAME).replaceAll('/','-').toLowerCase()
@@ -25,8 +30,8 @@ pipeline {
 
     stage('Lint') {
       steps {
-        // Простейший пример линтера для Maven
-        sh 'mvn -f app/pom.xml -DskipTests checkstyle:check || true'
+        // Строго: PR упадёт при нарушениях стиля
+        sh 'mvn -f app/pom.xml -DskipTests checkstyle:check'
       }
     }
 
@@ -47,11 +52,12 @@ pipeline {
       }
     }
 
+    // Публикуем образ ТОЛЬКО для main и НЕ для PR
     stage('Docker Buildx & Push (main only)') {
       when {
         allOf {
           branch 'main'
-          expression { env.CHANGE_ID == null }  // не PR
+          expression { env.CHANGE_ID == null } // не PR
         }
       }
       steps {
@@ -60,6 +66,7 @@ pipeline {
             set -euo pipefail
             echo "$DH_PASS" | docker login -u "$DH_USER" --password-stdin
 
+            # buildx для multi-arch (Mac arm64 -> EC2 amd64)
             docker buildx create --name diploma_builder --use || true
             docker buildx inspect --bootstrap
 
@@ -78,11 +85,12 @@ pipeline {
       }
     }
 
+    // Деплой ТОЛЬКО после merge в main (не PR)
     stage('Deploy to EC2 (main only)') {
       when {
         allOf {
           branch 'main'
-          expression { env.CHANGE_ID == null }  // не PR
+          expression { env.CHANGE_ID == null } // не PR
         }
       }
       steps {
@@ -99,7 +107,7 @@ pipeline {
   }
 
   post {
-    success { echo '✅ CI успешно; для main также выполнен CD.' }
+    success { echo '✅ CI успешно; для main выполнены Buildx/Push/Deploy.' }
     failure { echo '❌ Ошибка пайплайна (см. логи выше).' }
   }
 }
