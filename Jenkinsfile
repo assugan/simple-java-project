@@ -87,40 +87,32 @@ pipeline {
         }
       }
       steps {
-        sh '''
-      set -euo pipefail
+        withCredentials([usernamePassword(credentialsId: 'aws-creds', usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY')]) {
+          withEnv([
+            'AWS_DEFAULT_REGION=eu-central-1',
+            'ANSIBLE_HOST_KEY_CHECKING=False' // не стопоримся на unknown host keys
+          ]) {
+            sh '''
+              set -euo pipefail
 
-      #  Убедимся, что terraform есть
-      terraform -version
+              # Убедимся, что ansible есть и поставим коллекции
+              ansible --version
+              ansible-galaxy collection install -r ansible/requirements.yml --force
 
-      #  Инициализируем Terraform в каталоге infra (подкачаем провайдеры из lock-файла)
-      terraform -chdir=infra init -input=false -upgrade
+              # (на всякий) Убедимся, что boto3 есть в активном Python
+              python3 -m pip install --user boto3 botocore >/dev/null 2>&1 || true
 
-      #  Читаем output c публичным IP
-      EC2_IP="$(terraform -chdir=infra output -raw ec2_public_ip || true)"
-      echo "EC2_IP=${EC2_IP:-<empty>}"
-      if [ -z "${EC2_IP}" ]; then
-        echo "ERROR: terraform output пустой. Проверь, что после apply есть локальный state в infra/ и задан output ec2_public_ip."
-        exit 1
-      fi
+              # Быстрая диагностика: увидим найденные хосты
+              ansible-inventory -i ansible/inventory.aws_ec2.yml --graph
 
-      #  known_hosts
-      mkdir -p ~/.ssh
-      ssh-keyscan -H "$EC2_IP" >> ~/.ssh/known_hosts
-
-      #  Временный динамический inventory для Ansible
-      cat > ansible/inventory.dynamic.ini <<INV
-      [app]
-      ${EC2_IP} ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/ssh-diploma-key.pem
-      INV
-
-      #  Деплой приложения и мониторинга
-      ansible-playbook -i ansible/inventory.dynamic.ini ansible/playbook.yml \
-        --extra-vars "docker_image=$DOCKER_IMAGE:${BRANCH_SAFE}-${SHORT_SHA}"
-    '''
+              # Деплой приложения и мониторинга на все найденные инстансы
+              ansible-playbook -i ansible/inventory.aws_ec2.yml ansible/playbook.yml \
+                --extra-vars "docker_image=$DOCKER_IMAGE:${BRANCH_SAFE}-${SHORT_SHA}"
+            '''
+          }
+        }
       }
     }
-  }
 
   post {
     success { echo '✅ CI успешно; для main выполнены Buildx/Push/Deploy.' }
