@@ -88,26 +88,36 @@ pipeline {
       }
       steps {
         sh '''
-          set -euo pipefail
+      set -euo pipefail
 
-          # 1) Получаем актуальный IP из Terraform outputs
-          EC2_IP="$(cd infra && terraform output -raw ec2_public_ip)"
-          echo "EC2_IP=${EC2_IP}"
+      #  Убедимся, что terraform есть
+      terraform -version
 
-          # 2) Подготавливаем known_hosts
-          mkdir -p ~/.ssh
-          ssh-keyscan -H "$EC2_IP" >> ~/.ssh/known_hosts
+      #  Инициализируем Terraform в каталоге infra (подкачаем провайдеры из lock-файла)
+      terraform -chdir=infra init -input=false -upgrade
 
-          # 3) Делаем временный dynamic-inventory, чтобы не править ansible/inventory.ini
-          cat > ansible/inventory.dynamic.ini <<INV
-[app]
-${EC2_IP} ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/ssh-diploma-key.pem
-INV
+      #  Читаем output c публичным IP
+      EC2_IP="$(terraform -chdir=infra output -raw ec2_public_ip || true)"
+      echo "EC2_IP=${EC2_IP:-<empty>}"
+      if [ -z "${EC2_IP}" ]; then
+        echo "ERROR: terraform output пустой. Проверь, что после apply есть локальный state в infra/ и задан output ec2_public_ip."
+        exit 1
+      fi
 
-          # 4) Запуск плейбука с образом текущей сборки
-          ansible-playbook -i ansible/inventory.dynamic.ini ansible/playbook.yml \
-            --extra-vars "docker_image=$DOCKER_IMAGE:${BRANCH_SAFE}-${SHORT_SHA}"
-        '''
+      #  known_hosts
+      mkdir -p ~/.ssh
+      ssh-keyscan -H "$EC2_IP" >> ~/.ssh/known_hosts
+
+      #  Временный динамический inventory для Ansible
+      cat > ansible/inventory.dynamic.ini <<INV
+      [app]
+      ${EC2_IP} ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/ssh-diploma-key.pem
+      INV
+
+      #  Деплой приложения и мониторинга
+      ansible-playbook -i ansible/inventory.dynamic.ini ansible/playbook.yml \
+        --extra-vars "docker_image=$DOCKER_IMAGE:${BRANCH_SAFE}-${SHORT_SHA}"
+    '''
       }
     }
   }
