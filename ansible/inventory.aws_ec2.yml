@@ -13,7 +13,7 @@ filters:
 compose:
   ansible_host: public_ip_address
   ansible_user: "'ubuntu'"
-  ansible_ssh_private_key_file: "/Users/assugan/.ssh/ssh-diploma-key.pem"
+  ansible_ssh_private_key_file: "~/.ssh/ssh-diploma-key.pem"
 
 # Сформируем группу "app", чтобы playbook hosts: app находил нужные инстансы
 groups:
