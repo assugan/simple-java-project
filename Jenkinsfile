@@ -88,10 +88,10 @@ pipeline {
         }
       }
       steps {
-        withCredentials([usernamePassword(credentialsId: 'aws-creds', usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY')]) {
+        withCredentials([usernamePassword(credentialsId: 'ec2-ssh-key', keyFileVariable: 'EC2_SSH_KEY', usernameVariable: 'EC2_SSH_USER')]) {
           withEnv([
             'AWS_DEFAULT_REGION=eu-central-1',
-            'ANSIBLE_HOST_KEY_CHECKING=False' // чтобы не спотыкаться о known_hosts в CI
+            'ANSIBLE_HOST_KEY_CHECKING=False'
           ]) {
             sh '''
               set -euo pipefail
@@ -106,6 +106,8 @@ pipeline {
 
               # Деплой приложения и мониторинга на найденные EC2
               ansible-playbook -i ansible/inventory.aws_ec2.yml ansible/playbook.yml -vvv \
+                -u "$EC2_SSH_USER" --private-key "$EC2_SSH_KEY" \
+                -e 'ansible_ssh_common_args=-o IdentitiesOnly=yes' \
                 --extra-vars "docker_image=$DOCKER_IMAGE:${BRANCH_SAFE}-${SHORT_SHA}"
             '''
           }
