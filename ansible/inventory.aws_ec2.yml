@@ -1,0 +1,22 @@
+plugin: amazon.aws.ec2
+
+# В каком регионе искать инстансы
+regions:
+  - eu-central-1
+
+# Фильтр по тегу (ровно как в Terraform)
+filters:
+  tag:Name: diploma-app
+  instance-state-name: running
+
+# Какое имя хоста использовать — публичный IP
+hostnames:
+  - public-ip-address
+
+# Автозадать SSH-параметры хостам, чтобы не повторять в командной строке
+compose:
+  ansible_user: "'ubuntu'"
+  ansible_ssh_private_key_file: "~/.ssh/ssh-diploma-key.pem"
+
+# Если что-то не найдено — не падаем
+strict: false

@@ -1,13 +1,12 @@
-//  pipe
 pipeline {
   agent any
   tools { maven 'Maven_3.9' }
 
   environment {
-    // macOS: чтобы Jenkins видел docker/ansible/terraform
+    // macOS: чтобы Jenkins видел docker/ansible/terraform, если они стоят через Homebrew/Docker Desktop
     PATH = "/usr/local/bin:/opt/homebrew/bin:/Applications/Docker.app/Contents/Resources/bin:${PATH}"
 
-    // DockerHub repo
+    // Образ в DockerHub (должны быть credentials с ID: dockerhub-creds)
     DOCKER_IMAGE = "assugan/diploma-app"
   }
 
@@ -47,11 +46,12 @@ pipeline {
       }
     }
 
+    // Публикуем образы ТОЛЬКО для main и НЕ для PR
     stage('Docker Buildx & Push (main only)') {
       when {
         allOf {
-          expression { env.BRANCH_NAME == 'main' }  // именно ветка main
-          not { changeRequest() }                   // и это не PR
+          expression { env.BRANCH_NAME == 'main' } // именно ветка main
+          not { changeRequest() }                  // и это не PR
         }
       }
       steps {
@@ -79,6 +79,7 @@ pipeline {
       }
     }
 
+    // Деплой в EC2 через динамический инвентори AWS (только после merge в main)
     stage('Deploy to EC2 (main only)') {
       when {
         allOf {
@@ -87,43 +88,34 @@ pipeline {
         }
       }
       steps {
-        sh '''
-      set -euo pipefail
+        withCredentials([usernamePassword(credentialsId: 'aws-creds', usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY')]) {
+          withEnv([
+            'AWS_DEFAULT_REGION=eu-central-1',
+            'ANSIBLE_HOST_KEY_CHECKING=False' // чтобы не спотыкаться о known_hosts в CI
+          ]) {
+            sh '''
+              set -euo pipefail
 
-      #  Убедимся, что terraform есть
-      terraform -version
+              # Коллекции для dynamic inventory (amazon.aws) и зависимости
+              ansible --version
+              ansible-galaxy collection install -r ansible/requirements.yml --force
+              python3 -m pip install --user boto3 botocore >/dev/null 2>&1 || true
 
-      #  Инициализируем Terraform в каталоге infra (подкачаем провайдеры из lock-файла)
-      terraform -chdir=infra init -input=false -upgrade
+              # Посмотрим, кого найдём по тегу Name=diploma-ec2 (как в Terraform)
+              ansible-inventory -i ansible/inventory.aws_ec2.yml --graph
 
-      #  Читаем output c публичным IP
-      EC2_IP="$(terraform -chdir=infra output -raw ec2_public_ip || true)"
-      echo "EC2_IP=${EC2_IP:-<empty>}"
-      if [ -z "${EC2_IP}" ]; then
-        echo "ERROR: terraform output пустой. Проверь, что после apply есть локальный state в infra/ и задан output ec2_public_ip."
-        exit 1
-      fi
-
-      #  known_hosts
-      mkdir -p ~/.ssh
-      ssh-keyscan -H "$EC2_IP" >> ~/.ssh/known_hosts
-
-      #  Временный динамический inventory для Ansible
-      cat > ansible/inventory.dynamic.ini <<INV
-      [app]
-      ${EC2_IP} ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/ssh-diploma-key.pem
-      INV
-
-      #  Деплой приложения и мониторинга
-      ansible-playbook -i ansible/inventory.dynamic.ini ansible/playbook.yml \
-        --extra-vars "docker_image=$DOCKER_IMAGE:${BRANCH_SAFE}-${SHORT_SHA}"
-    '''
+              # Деплой приложения и мониторинга на найденные EC2
+              ansible-playbook -i ansible/inventory.aws_ec2.yml ansible/playbook.yml \
+                --extra-vars "docker_image=$DOCKER_IMAGE:${BRANCH_SAFE}-${SHORT_SHA}"
+            '''
+          }
+        }
       }
     }
   }
 
   post {
-    success { echo '✅ CI успешно; для main выполнены Buildx/Push/Deploy.' }
+    success { echo '✅ CI ок; для main выполнены Buildx/Push/Deploy.' }
     failure { echo '❌ Ошибка пайплайна (см. логи выше).' }
   }
 }
