@@ -1,17 +1,23 @@
-plugin: amazon.aws.aws_ec2   # <— исправлено (было amazon.aws.ec2)
+plugin: amazon.aws.aws_ec2
 
 regions:
   - eu-central-1
 
+# Оставляем фильтр по имени (как в Terraform), + только running
 filters:
-  tag:Name: diploma-app
+  tag:Name: diploma-ec2
   instance-state-name: running
 
-hostnames:
-  - public-ip-address
-
+# Не пытаемся подменять имя хоста — лучше явно задать ansible_host
+# (иначе иногда в графе видишь буквальную строку "public-ip-address")
 compose:
+  ansible_host: public_ip_address
   ansible_user: "'ubuntu'"
   ansible_ssh_private_key_file: "~/.ssh/ssh-diploma-key.pem"
 
+# Сформируем группу "app", чтобы playbook hosts: app находил нужные инстансы
+groups:
+  app: "tags.Name is defined and tags.Name == 'diploma-app'"
+
+# Если что-то не так распарсилось — не падаем
 strict: false
