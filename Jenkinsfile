@@ -3,10 +3,10 @@ pipeline {
   tools { maven 'Maven_3.9' }
 
   environment {
-    // macOS: чтобы Jenkins видел docker/ansible (если стоят через Homebrew/Docker Desktop)
+    // macOS: чтобы Jenkins видел docker/ansible/terraform, если они стоят через Homebrew/Docker Desktop
     PATH = "/usr/local/bin:/opt/homebrew/bin:/Applications/Docker.app/Contents/Resources/bin:${PATH}"
 
-    // Образ в DockerHub (должны быть credentials c ID: dockerhub-creds)
+    // Образ в DockerHub (должны быть credentials с ID: dockerhub-creds)
     DOCKER_IMAGE = "assugan/diploma-app"
   }
 
@@ -46,19 +46,16 @@ pipeline {
       }
     }
 
+    // Публикуем образы ТОЛЬКО для main и НЕ для PR
     stage('Docker Buildx & Push (main only)') {
       when {
         allOf {
-          expression { env.BRANCH_NAME == 'main' }  // только ветка main
-          not { changeRequest() }                   // и это не PR
+          expression { env.BRANCH_NAME == 'main' } // именно ветка main
+          not { changeRequest() }                  // и это не PR
         }
       }
       steps {
-        withCredentials([usernamePassword(
-          credentialsId: 'dockerhub-creds',
-          usernameVariable: 'DH_USER',
-          passwordVariable: 'DH_PASS'
-        )]) {
+        withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'DH_USER', passwordVariable: 'DH_PASS')]) {
           sh '''
             set -euo pipefail
             echo "$DH_PASS" | docker login -u "$DH_USER" --password-stdin
@@ -73,7 +70,8 @@ pipeline {
               -t "$DOCKER_IMAGE:${BUILD_NUMBER}" \
               -t "$DOCKER_IMAGE:latest" \
               -f docker/Dockerfile \
-              --push .
+              --push \
+              .
 
             docker logout || true
           '''
@@ -81,6 +79,7 @@ pipeline {
       }
     }
 
+    // Деплой в EC2 через динамический инвентори AWS (только после merge в main)
     stage('Deploy to EC2 (main only)') {
       when {
         allOf {
@@ -89,6 +88,7 @@ pipeline {
         }
       }
       steps {
+        // AWS креды — как раньше (usernamePassword с ID aws-creds)
         withCredentials([
           usernamePassword(credentialsId: 'aws-creds', usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY'),
           sshUserPrivateKey(credentialsId: 'ec2-ssh-key', keyFileVariable: 'EC2_SSH_KEY', usernameVariable: 'EC2_SSH_USER')
@@ -96,13 +96,12 @@ pipeline {
           withEnv([
             'AWS_DEFAULT_REGION=eu-central-1',
             'ANSIBLE_HOST_KEY_CHECKING=False',
-            // важно: заставляем ssh использовать только наш ключ
+            // Очень важно: заставляем ssh использовать ТОЛЬКО наш ключ
             'ANSIBLE_SSH_ARGS=-o IdentitiesOnly=yes -o StrictHostKeyChecking=no'
           ]) {
             sh '''
               set -euo pipefail
 
-              # Коллекция для dynamic inventory (amazon.aws) и python-зависимости
               ansible --version
               ansible-galaxy collection install -r ansible/requirements.yml --force
               python3 -m pip install --user boto3 botocore >/dev/null 2>&1 || true
@@ -111,11 +110,9 @@ pipeline {
               ansible-inventory -i ansible/inventory.aws_ec2.yml --graph
 
               echo "== Sanity ping =="
-              ansible -i ansible/inventory.aws_ec2.yml app \
-                -u "$EC2_SSH_USER" --private-key "$EC2_SSH_KEY" \
-                -m ping -vvv
+              ansible -i ansible/inventory.aws_ec2.yml app -u "$EC2_SSH_USER" --private-key "$EC2_SSH_KEY" -m ping -vvv
 
-              echo "== Deploy playbook =="
+              echo "== Deploy =="
               ansible-playbook -i ansible/inventory.aws_ec2.yml ansible/playbook.yml \
                 -u "$EC2_SSH_USER" --private-key "$EC2_SSH_KEY" \
                 --extra-vars "docker_image=$DOCKER_IMAGE:${BRANCH_SAFE}-${SHORT_SHA}"
@@ -124,10 +121,9 @@ pipeline {
         }
       }
     }
-  }
 
   post {
-    success { echo '✅ CI ок; для main выполнены Buildx/Push/Deploy.' }
+    success { echo '✅ CI Oк' }
     failure { echo '❌ Ошибка пайплайна (см. логи выше).' }
   }
 }
