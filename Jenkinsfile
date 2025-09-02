@@ -119,7 +119,7 @@ pipeline {
 
   post {
     success {
-      echo '✅ CI пройден; для main выполнены Buildx/Push/Deploy.'
+      echo '✅ CI пройден.'
     }
     failure {
       echo '❌ Ошибка пайплайна (см. логи выше).'
