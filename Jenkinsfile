@@ -3,25 +3,22 @@ pipeline {
   tools { maven 'Maven_3.9' }
 
   environment {
-    // macOS: добавим стандартные пути, чтобы docker/ansible были видны
-    PATH         = "/usr/local/bin:/opt/homebrew/bin:/Applications/Docker.app/Contents/Resources/bin:${PATH}"
+    // macOS: чтобы Jenkins видел docker/ansible/terraform, если они стоят через Homebrew/Docker Desktop
+    PATH = "/usr/local/bin:/opt/homebrew/bin:/Applications/Docker.app/Contents/Resources/bin:${PATH}"
+
+    // Образ в DockerHub (должны быть credentials с ID: dockerhub-creds)
     DOCKER_IMAGE = "assugan/diploma-app"
-    AWS_REGION   = "eu-central-1"
   }
 
-  options {
-    timestamps()
-  }
+  options { timestamps() }
 
   stages {
     stage('Checkout + Meta') {
       steps {
         checkout scm
         script {
-          // CHANGE_ID существует в сборках PR (Multibranch)
-          env.IS_PR      = env.CHANGE_ID ? 'true' : 'false'
-          env.SHORT_SHA  = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
-          env.BRANCH_SAFE = (env.CHANGE_BRANCH ?: env.BRANCH_NAME).replaceAll('/', '-').toLowerCase()
+          env.SHORT_SHA   = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
+          env.BRANCH_SAFE = (env.CHANGE_BRANCH ?: env.BRANCH_NAME).replaceAll('/','-').toLowerCase()
         }
       }
     }
@@ -49,11 +46,12 @@ pipeline {
       }
     }
 
+    // Публикуем образы ТОЛЬКО для main и НЕ для PR
     stage('Docker Buildx & Push (main only)') {
       when {
         allOf {
-          branch 'main'
-          expression { env.CHANGE_ID == null } // не PR, а обычный коммит в main
+          expression { env.BRANCH_NAME == 'main' } // именно ветка main
+          not { changeRequest() }                  // и это не PR
         }
       }
       steps {
@@ -62,7 +60,7 @@ pipeline {
             set -euo pipefail
             echo "$DH_PASS" | docker login -u "$DH_USER" --password-stdin
 
-            # buildx может уже существовать — это нормально
+            # buildx для multi-arch (Mac arm64 -> EC2 amd64)
             docker buildx create --name diploma_builder --use || true
             docker buildx inspect --bootstrap
 
@@ -81,48 +79,45 @@ pipeline {
       }
     }
 
+    // Деплой в EC2 через динамический инвентори AWS (только после merge в main)
     stage('Deploy to EC2 (main only)') {
       when {
         allOf {
-          branch 'main'
-          expression { env.CHANGE_ID == null } // не PR
+          expression { env.BRANCH_NAME == 'main' }
+          not { changeRequest() }
         }
       }
       steps {
-        withCredentials([
-          sshUserPrivateKey(credentialsId: 'ec2-ssh-key', keyFileVariable: 'EC2_SSH_KEY', usernameVariable: 'EC2_SSH_USER')
-        ]) {
-          sh '''
-            set -euo pipefail
-            export AWS_DEFAULT_REGION="${AWS_REGION}"
-            export ANSIBLE_HOST_KEY_CHECKING=False
+        withCredentials([usernamePassword(credentialsId: 'ec2-ssh-key', keyFileVariable: 'EC2_SSH_KEY', usernameVariable: 'EC2_SSH_USER')]) {
+          withEnv([
+            'AWS_DEFAULT_REGION=eu-central-1',
+            'ANSIBLE_HOST_KEY_CHECKING=False'
+          ]) {
+            sh '''
+              set -euo pipefail
 
-            # Установим/обновим плагин инвентори и зависимости для AWS
-            ansible --version
-            ansible-galaxy collection install -r ansible/requirements.yml --force
-            python3 -m pip install --user boto3 botocore >/dev/null 2>&1 || true
+              # Коллекции для dynamic inventory (amazon.aws) и зависимости
+              ansible --version
+              ansible-galaxy collection install -r ansible/requirements.yml --force
+              python3 -m pip install --user boto3 botocore >/dev/null 2>&1 || true
 
-            # Посмотрим, что находит dynamic inventory по тегу Name=diploma-ec2 (как в Terraform)
-            ansible-inventory -i ansible/inventory.aws_ec2.yml --graph
+              # Посмотрим, кого найдём по тегу Name=diploma-ec2 (как в Terraform)
+              ansible-inventory -i ansible/inventory.aws_ec2.yml --graph
 
-            # Деплой приложения и мониторинга.
-            # Ключ и IdentitiesOnly явно — чтобы не зависеть от локальных настроек.
-            ansible-playbook -i ansible/inventory.aws_ec2.yml ansible/playbook.yml -vvv\
-              -u "$EC2_SSH_USER" --private-key "$EC2_SSH_KEY" \
-              -e 'ansible_ssh_common_args=-o IdentitiesOnly=yes' \
-              --extra-vars "docker_image=$DOCKER_IMAGE:${BRANCH_SAFE}-${SHORT_SHA}"
-          '''
+              # Деплой приложения и мониторинга на найденные EC2
+              ansible-playbook -i ansible/inventory.aws_ec2.yml ansible/playbook.yml -vvv \
+                -u "$EC2_SSH_USER" --private-key "$EC2_SSH_KEY" \
+                -e 'ansible_ssh_common_args=-o IdentitiesOnly=yes' \
+                --extra-vars "docker_image=$DOCKER_IMAGE:${BRANCH_SAFE}-${SHORT_SHA}"
+            '''
+          }
         }
       }
     }
   }
 
   post {
-    success {
-      echo '✅ CI пройден.'
-    }
-    failure {
-      echo '❌ Ошибка пайплайна (см. логи выше).'
-    }
+    success { echo '✅ CI Oк.' }
+    failure { echo '❌ Ошибка пайплайна (см. логи выше).' }
   }
 }
