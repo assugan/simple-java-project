@@ -5,7 +5,7 @@ regions:
 
 # Оставляем фильтр по имени (как в Terraform), + только running
 filters:
-  tag:Name: diploma-ec2
+  tag:Name: diploma-app
   instance-state-name: running
 
 # Не пытаемся подменять имя хоста — лучше явно задать ansible_host
